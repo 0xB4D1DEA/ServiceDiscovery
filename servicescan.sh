@@ -39,16 +39,23 @@ ALL_PORTS="phase4_all_ports.txt"
 DETAILED_DIR="phase4_details"
 
 # Ranges & rates
-TCP_NMAP_TOP=1000
+TCP_NMAP_TOP=1000  #default 1000, but use 1 for testing
 MASSCAN_RATE=1000
-UDP_TOP=1
+MASSCAN_PORT_RANGE="-p1-p65535" #default -p1-p65535, but use -p1-p100 for testing
+UDP_TOP=1000       #default 1000, but use 1 for testing
 NMAP_T=4
-STAT_INTERVAL="60s"
+STAT_INTERVAL="30s"
 
 # -------------------------------------------------------------
 # PHASE 1: Discover live hosts
 # -------------------------------------------------------------
 echo "=== Phase 1: Discover live hosts ==="
+PHASE1_COMMAND="nmap -sn -PR -PE -PS80,443 -PU53 -iL \"$TARGETS\" -oG \"$ALIVE_GREP\""
+echo
+echo "Running: "
+echo "  $PHASE1_COMMAND"
+echo
+
 nmap -sn -PR -PE -PS80,443 -PU53 -iL "$TARGETS" -oG "$ALIVE_GREP"
 
 awk '/Up$/{print $2}' "$ALIVE_GREP" | sort -u > "$LIVE_LIST"
@@ -64,6 +71,13 @@ sed 's/^/  /' "$LIVE_LIST"
 # -------------------------------------------------------------
 echo
 echo "=== Phase 2a-A: Nmap TCP top-$TCP_NMAP_TOP with stats every $STAT_INTERVAL ==="
+PHASE_2aA_COMMAND="nmap -Pn -sS --top-ports $TCP_NMAP_TOP -T$NMAP_T --open --stats-every $STAT_INTERVAL -iL \"$LIVE_LIST\" -Og \"$NMAP_TCP_GREP\""
+
+echo
+echo "Running: "
+echo "  $PHASE_2aA_COMMAND"
+echo
+
 nmap -Pn -sS --top-ports $TCP_NMAP_TOP -T$NMAP_T --open \
   --stats-every $STAT_INTERVAL \
   -iL "$LIVE_LIST" -oG "$NMAP_TCP_GREP"
@@ -83,10 +97,19 @@ awk '/\/open\/tcp/ {
 # PHASE 2a-B: Masscan full-range with status every 30s
 # -------------------------------------------------------------
 echo
-echo "=== Phase 2a-B: Masscan TCP 1-65535 @ ${MASSCAN_RATE}pps with status every 30s ==="
-sudo masscan -p1-65535 --rate "$MASSCAN_RATE" \
+echo "=== Phase 2a-B: Masscan TCP $MASSCAN_PORT_RANGE @${MASSCAN_RATE}pps with status every 30s ==="
+
+PHASE_2aB_COMMAND="sudo masscan $MASSCAN_PORT_RANGE --rate \"$MASSCAN_RATE\" -iL \"$LIVE_LIST\" --open-only -oL \"$MASSCAN_TCP_RAW\" || echo \"[!] masscan exicted with code $?\""
+
+echo
+echo "Running: "
+echo "  $PHASE_2aB_COMMAND"
+echo
+
+
+sudo masscan $MASSCAN_PORT_RANGE --rate "$MASSCAN_RATE" \
   -iL "$LIVE_LIST" --open-only \
-  -oL "$MASSCAN_TCP_RAW" || echo "[!] masscan exited with code $?"
+  -oL "$MASSCAN_TCP_RAW" -v || echo "[!] masscan exited with code $?"
 
 # parse Masscan results
 awk '/open tcp/ { print $4 ":" $3 }' "$MASSCAN_TCP_RAW" | sort -u >> "$TCP_LIST"
@@ -100,8 +123,16 @@ sed 's/^/  /' "$TCP_LIST" || echo "  (none)"
 # -------------------------------------------------------------
 echo
 echo "=== Phase 2b: UDP sweep top-$UDP_TOP ==="
+
+PHASE_2b_COMMAND="nmap -Pn -sU -T$NMAP_T --top-ports $UDP_TOP --open \ -iL \"$LIVE_LIST\" -oG \"$UDP_GREP\""
+
+echo
+echo "Running: "
+echo "  $PHASE_2b_COMMAND"
+echo
+
 nmap -Pn -sU -T$NMAP_T --top-ports $UDP_TOP --open \
-  -iL "$LIVE_LIST" -oG "$UDP_GREP"
+  -iL "$LIVE_LIST" -oG "$UDP_GREP" --host-timeout 1m --max-retries 1 --min-rate 500 --stats-every $STAT_INTERVAL
 
 awk '/\/open\|filtered\/udp/ || /\/open\/udp/ {
   host=$2
@@ -135,9 +166,19 @@ sed 's/^/  /' "$ALL_PORTS"
 # -------------------------------------------------------------
 echo
 echo "=== Phase 4: Scanning all live hosts on all discovered ports ==="
-mkdir -p "$DETAILED_DIR"
 
 PORTS=$(<"$ALL_PORTS")
+
+PHASE4_COMMAND="nmap -A -T$NMAP_T -p \"$PORTS\" -iL \"$LIVE_LIST\" \
+-oA \"$DETAILED_DIR/all_hosts\" --stats-every $STAT_INTERVAL\""
+
+echo
+echo "Running: "
+echo "  $PHASE4_COMMAND"
+echo
+
+mkdir -p "$DETAILED_DIR"
+
 nmap -A -T$NMAP_T -p "$PORTS" -iL "$LIVE_LIST" -oA "$DETAILED_DIR/all_hosts" \
   --stats-every $STAT_INTERVAL
 
@@ -152,3 +193,10 @@ echo " • phase2a-list: $TCP_LIST"
 echo " • phase2b-udp: $UDP_GREP / $UDP_LIST"
 echo " • phase3: $COMBINED"
 echo " • phase4-all: $DETAILED_DIR/all_hosts.*"
+
+echo
+echo "=== Creating CSV of all discovered services for manual analysis: ==="
+./nmap_to_csv.sh
+
+echo "=== Running gowitness scan on discovered services: ==="
+gowitness scan nmap -f $DETAILED_DIR/all_hosts.xml --write-db
