@@ -40,8 +40,8 @@ DETAILED_DIR="phase4_details"
 
 # Ranges & rates
 TCP_NMAP_TOP=1000  #default 1000, but use 1 for testing
-MASSCAN_RATE=1000
-MASSCAN_PORT_RANGE="-p1-p65535" #default -p1-p65535, but use -p1-p100 for testing
+MASSCAN_RATE=1000  #default 1000, but use 5000 or 10000 for testing
+MASSCAN_PORT_RANGE="-p22,53,80,443,554,8170,8443,10000,30005" #default -p1-p65535, but use -p1-p100 for testing
 UDP_TOP=1000       #default 1000, but use 1 for testing
 NMAP_T=4
 STAT_INTERVAL="30s"
@@ -132,7 +132,7 @@ echo "  $PHASE_2b_COMMAND"
 echo
 
 nmap -Pn -sU -T$NMAP_T --top-ports $UDP_TOP --open \
-  -iL "$LIVE_LIST" -oG "$UDP_GREP" --host-timeout 1m --max-retries 1 --min-rate 500 --stats-every $STAT_INTERVAL
+  -iL "$LIVE_LIST" -oG "$UDP_GREP" --host-timeout 1m --max-retries 1 --min-rate 500 --stats-every 30s
 
 awk '/\/open\|filtered\/udp/ || /\/open\/udp/ {
   host=$2
@@ -195,8 +195,21 @@ echo " • phase3: $COMBINED"
 echo " • phase4-all: $DETAILED_DIR/all_hosts.*"
 
 echo
-echo "=== Creating CSV of all discovered services for manual analysis: ==="
+echo "Creating CSV of all discovered services for manual analysis:"
 ./nmap_to_csv.sh
 
-echo "=== Running gowitness scan on discovered services: ==="
+echo
+echo "Running gowitness scan on discovered services:"
 gowitness scan nmap -f $DETAILED_DIR/all_hosts.xml --write-db
+
+echo
+echo "Generating list of webapps discovered from gowitness results:"
+sudo gowitness report list | grep http | awk {'print $10'} > webapps.txt
+cat webapps.txt
+
+echo
+echo "Running nuclei scan on all discovered webapps:"
+sudo nuclei -list webapps.txt -si 60 -ts -stats -o nuclei_output.txt
+
+echo
+echo "done with initial recon?"
