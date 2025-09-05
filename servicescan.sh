@@ -200,6 +200,7 @@ echo "Creating CSV of all discovered services for manual analysis:"
 
 echo
 echo "Running gowitness scan on discovered services:"
+# gowitness scan nmap -f phase4_details/all_hosts.xml --write-db
 gowitness scan nmap -f $DETAILED_DIR/all_hosts.xml --write-db
 
 echo
